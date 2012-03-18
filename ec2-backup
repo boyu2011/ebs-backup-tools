@@ -1,0 +1,429 @@
+#!/usr/bin/env ruby
+#
+# Author : Bo Yu (byu1@stevens.edu)
+#
+# This program used for backup a directory into Elastic Block Storage (EBS)
+#
+# SYNOPSIS
+#    ec2-backup [-hv] [-i instance] [-t tag] [-m method] -d dir -K PRIVATE_KEY -C CERT -k KEYPAIR -f KEYPAIR_FILE -g SECURITY_GROUP
+# 
+# DESCRIPTION
+#    The ec2-backup tool performs a backup of the given directory into Amazon
+#    Elastic Block Storage (EBS).  This is achieved by creating a volume of
+#    the appropriate size, attaching it to an EC2 instance and finally copying
+#    the files from the given directory into this volume.
+#
+# DETAILS    
+#    ec2-backup will perform a backup of the given directory to an ESB volume.
+#    The backup is done in one of two ways: via direct write to the volume
+#    (utilizing tar(1) on the local host and dd(1) on the remote instance), or
+#    via a (possibly incremental) filesystem sync (utilizing rsync(1)).
+#
+#    ec2-backup will create a new volume (unless the -t flag was specified and
+#    a volume matching the given tag already exists).  The new volume will be
+#    at least two times the size of the directory to be backed up.
+#
+#    Unless an instance is given using the -i flag, ec2-backup will create an
+#    instance suitable to perform the backup, attach the volume in question
+#    and then back up the data from the given directory using the specified
+#    method and then shut down the instance it created.
+#
+
+require 'optparse'
+
+##################################################################################
+
+def print_usage
+	puts "USAGE: ec2-backup [-hv] [-i instance] [-t tag] [-m method] -d dir -K PRIVATE_KEY -C CERT -k KEYPAIR -f KEYPAIR_FILE -g SECURITY_GROUP"
+end
+
+#	
+# Parse commandline arguments
+#
+
+# add option switch and handler
+
+options = {}
+option_parser = OptionParser.new do |opts|
+
+	# private key argument
+	options[:privatekey] = nil
+	opts.on( '-K', '--private-key PRIVATE_KEY', 'Specify KEY as the private key to use' ) { |privatekey| options[:privatekey] = privatekey }
+
+	# x509 certificate argument
+	options[:cert] = nil
+	opts.on( '-C', '--cert CERT', 'Specify CERT as the X509 certificate to use' ) { |cert| options[:cert] = cert }
+
+	# keypair argument
+	options[:keypair] = nil
+	opts.on( '-k', '--key KEYPAIR', 'Specifies the name of the key pair to use when launching the instance(s)' ) { |key| options[:keypair] = key }
+
+	# keypair file location argument
+	options[:keypair_file] = nil
+	opts.on( '-f', '--keypairfile KEYPAIR_FILE', 'Specify the file of keypair' ) { |kf| options[:keypair_file] = kf }
+
+	# security group argument
+	options[:group] = nil
+	opts.on( '-g', '--group SECURITY_GROUP', 'Specifies the security group' ) { |group| options[:group] = group }
+		
+	options[:instance] = nil
+  	opts.on( '-i', '--instance INSTANCE_ID', 'Specify instance ID' ) { |instance| options[:instance] = instance }
+
+  	options[:tag] = nil
+  	opts.on( '-t', '--tag TAG', 'Speicify Tag' ) { |tag| options[:tag] = tag }
+
+  	options[:dir] = nil
+  	opts.on( '-d', '--dir DIR', 'Specify Directory' ) { |dir| options[:dir] = dir }
+
+	options[:method] = nil
+	opts.on( '-m', '--method METHOD', 'Use the given method (dd or sync) to perform the backup; default is dd' ) { |method| options[:method]=method }
+
+  	options[:help] = false
+  	opts.on( '-h', '--help', 'List usage of ec2-backup' ) { |help| options[:help] = true }
+
+	options[:verbose] = nil
+	opts.on( '-v', '--verbose', 'Print useful information') { |v| options[:verbose] = v }
+end
+
+option_parser.parse!
+
+##################################################################################
+
+#
+# Filter unvalid arguments.
+#
+
+# -h	Print an Usage and exit
+
+# if -h has set, print Usage and exit
+if options[:help]
+  	print_usage
+	exit
+end
+
+# -K	Private Key
+
+# if -K is set, check whether a valid private key
+if options[:privatekey] then
+	private_key = options[:privatekey]
+	
+	# verify a file is a valid private key
+	unless File.file? private_key
+		puts "The Private Key is unvalid. Please set a new one."
+		print_usage
+		exit
+	end
+# if -K is not set, tell user set one and exit
+else
+	puts "A Private Key (-K) is required. Please set one."
+	print_usage
+	exit
+end
+
+# -C	X509 Certificate
+
+# if -C is set, check whether a valid certificate
+if options[:cert] then
+	cert = options[:cert]
+
+	# verify a file is a valid certificate
+	unless File.file? cert
+		puts "The Certificate is unvalid. Please set a new one."
+		print_usage
+		exit		
+	end	
+# if -C is not set, tell user set one and exit
+else
+	puts "A X509 Certificate (-C) is required. Please set one."
+	print_usage
+	exit
+end
+
+# -k	keypair (it's not a file but a name)
+
+if options[:keypair] then
+	keypair = options[:keypair]
+# if -k is not set, tell user set one and exit
+else
+	puts "A key pair (-k) is required. Please set one."
+	print_usage
+	exit
+end
+
+# -kf	keypair file
+
+if options[:keypair_file] then
+	keypair_file = options[:keypair_file]
+
+	# verify whether a valid file
+	unless File.file? keypair_file
+		puts "The keypair file [#{keypair_file}] is not a valid file. Please set another one."
+		print_usage 
+		exit
+	end
+else
+	puts "A keypair file (-f) is required. Please set one."
+	print_usage
+	exit
+end
+
+# -g	security group (it's not a file but a name)
+
+if options[:group] then
+	security_group = options[:group]
+# if -g is not set, tell user set one and exit
+else
+	puts "A security group (-g) is required. Please set one."
+	print_usage
+	exit
+end
+
+# -i	Unless an instance is given using the -i flag, ec2-backup will create an instance
+
+# if -i is set, check whether a valid instance
+
+if options[:instance] then
+  	instance_id = options[:instance]
+	# if ec2-describe-instances returns empty string, that means the instance is unvalid
+	if `ec2-describe-instances #{instance_id} -K #{private_key} -C #{cert}` == "" then
+		puts "The INSTANCE #{instance_id} is unvalid, please set a new one."
+		print_usage
+		exit
+	end
+# if -i is not set, we will create a new instance later.
+else
+	instance_id = false
+end   
+
+# -t	ec2-backup will create a new volume (unless the -t flag was specified and a volume matching the given tag already exists)
+
+# if -t is set, check whether a valid tag
+if options[:tag] then
+  	volume_tag = options[:tag]
+	
+	# if this tag exist, tell the user choose another one, and then exit. 
+	if `ec2-describe-volumes -K #{private_key} -C #{cert} | grep #{volume_tag}` != "" then
+    		puts "The tag you specified has already existed, please specify another one."
+    		print_usage
+		exit
+	end
+# if -t is not set, assign the default one
+else
+  	volume_tag = "ec2-backup"
+
+	# if the default tag has set, tell the user choose another one. 
+	if `ec2-describe-volumes -K #{private_key} -C #{cert} | grep #{volume_tag}` != "" then
+    		puts "The default tag #{volume_tag} has already existed, please specify another one."
+    		print_usage
+		exit
+	end
+end
+
+# -d	backup this directory
+
+# if -d is specified, check whether a valid directory
+if options[:dir] then
+  	backup_dir = options[:dir]
+	
+	unless File.directory? "#{backup_dir}"
+		puts 'The directory #{backup_dir} is not valid, please specify another one.'
+		print_usage
+		exit
+	end
+# if -d doesn't set, tell user set one
+else
+  	puts "The directory is required, please specify one."
+  	print_usage
+	exit
+end
+
+# -m	backup method: dd(default) or rsync
+
+# if backup method is specified, check whether a valid one
+if options[:method]
+	# if backup method is valid
+	if options[:method] == 'dd'
+		backup_method = options[:method]
+	elsif options[:method] == 'rsync'
+		backup_method = options[:method]
+	# the method is not valid
+	else
+		puts 'The backup method you specified is not valid, please specify a valid one (dd or rsync).'
+		print_usage
+		exit
+	end
+# if backup method doesn't set, use the dd as default one	
+else
+	backup_method = 'dd'
+end
+
+# -v	Print useful information if -v set.
+
+if options[:verbose]
+	verbose = true
+else
+	verbose = false
+end
+
+##################################################################################
+
+#
+# DEBUG --- Print arguments
+#
+
+puts "PRIVATEKEY    : #{private_key}" 	if verbose
+puts "CERT	    : #{cert}"		if verbose
+puts "KEYPAIR	    : #{keypair}"	if verbose
+puts "KEYPAIR FILE  : #{keypair_file}"	if verbose
+puts "SECURITY GROUP: #{security_group}"if verbose
+puts "INSTANCE      : #{instance_id}"   if verbose
+puts "TAG           : #{volume_tag}"	if verbose
+puts "DIRECTORY     : #{backup_dir}"	if verbose
+puts "BACKUP METHOD : #{backup_method}" if verbose
+puts "VERBOSE 	    : #{verbose}"	if verbose
+
+##################################################################################
+#
+# Create a volume
+#
+#  ec2-backup will create a new volume (unless the -t flag was specified and
+#  a volume matching the given tag already exists).  The new volume will be
+#  at least two times the size of the directory to be backed up.
+#
+
+# estimate the size of the backup file
+backup_dir_output = `du -ks #{backup_dir}`
+puts "# Estimating size of backup directory: #{backup_dir_output}" if verbose
+array = backup_dir_output.split "\t"
+backup_dir_size = "%.f" % (array[0].to_f/1024/1024)	# transfer unit to G
+volume_size = backup_dir_size.to_i * 2
+if volume_size < 1
+	volume_size = 1
+end
+puts "# New volume size(G) : #{volume_size}" if verbose
+
+#   create a new volume which has at least two times the size of the directory to be backed up  
+new_volume_output = `ec2-create-volume  -K #{private_key} -C #{cert} --size #{volume_size} --availability-zone us-east-1a`
+
+#   add tag to the new volume
+
+#   1. search new volume id
+new_volume_output_array = new_volume_output.split "\t"
+new_volume_id = new_volume_output_array[1]
+puts new_volume_id
+
+#   2. add tag to the volume
+puts "Adding tag for volume.."
+new_volume_tag_output = `ec2-create-tags #{new_volume_id} --tag Name=#{volume_tag} -K #{private_key} -C #{cert}`
+puts new_volume_tag_output
+
+##################################################################################
+
+#
+# Attach it to an EC2 instance
+#
+#  Unless an instance is given using the -i flag, ec2-backup will create an
+#  instance suitable to perform the backup, attach the volume in question
+#  and then back up the data from the given directory using the specified
+#  method and then shut down the instance it created.
+#
+
+puts "# The New InstanceId = #{instance_id}" if verbose
+instance_public_dns = ""
+
+# Guarantee that the instance is running
+
+# if the instance is not running, we need to start it.
+if instance_id then
+	ec2_des_ins_output = `ec2-describe-instances -K #{private_key} -C #{cert} | grep #{instance_id}`
+
+	# if the instance status is stopped, open it. 
+    	array = ec2_des_ins_output.split "\t"
+    	if array[5] != "running" then
+      		puts `ec2-start-instances -K #{private_key} -C #{cert} #{instance_id}`
+      		sleep 20
+    	end
+# if user doesn't specify an instance, we need to create a new one with default AMI.
+else
+	# call another program ec2-start-instance !!!
+	new_ins = `./ec2-start-instance -K #{private_key} -C #{cert} -k #{keypair} -g #{security_group}`
+	puts new_ins if verbose	
+	array = new_ins.split "\t"
+	instance_id = array[0]
+	puts "# Instance_id : #{instance_id}" if verbose
+	instance_public_dns = array[1]
+	puts "# Instance_public_dns : [#{instance_public_dns}]" if verbose	
+end
+
+# attach the new volume to instance.
+
+puts "# Attaching a new volume to EC2 instance [#{instance_id}]..."
+
+mount_dev_location = "/dev/sdi"
+
+new_attach_output = `ec2-attach-volume #{new_volume_id} -i #{instance_id} -d #{mount_dev_location} -K #{private_key} -C #{cert}`
+puts new_attach_output if verbose
+
+sleep 4
+
+##################################################################################
+
+#
+# Logining to the instance, then executing commands
+#
+
+puts "# Logining to EC2 instance and executing commands.." if verbose
+
+#instance_key_location = "/Users/boyu2011/.ec2/stevens-key.pem"
+
+instance_login_user   = "root"
+mount_dir_location    = "/mnt/backup"
+
+executed_commands     = "sudo sleep 5; sudo mkfs -F #{mount_dev_location}; sudo sleep 5; sudo rm -rf #{mount_dir_location}; sudo mkdir #{mount_dir_location}; sudo sleep 2; sudo mount #{mount_dev_location} #{mount_dir_location}; sudo sleep 2; sudo chmod 777 #{mount_dir_location}; cd #{mount_dir_location};"
+puts executed_commands if verbose
+
+# logining and executing commands!!!
+
+ssh_login_output      = `ssh -t -o "StrictHostKeyChecking no" -i #{keypair_file} #{instance_login_user}@#{instance_public_dns} "#{executed_commands}"`
+puts ssh_login_output if verbose
+
+##################################################################################
+
+#
+# Backup file(s) into volume
+#
+
+puts "# Backup files into volume by #{backup_method}..." if verbose
+
+# backup files by rsync
+if backup_method == 'rsync' then
+	rsync_output = `rsync -avz -e 'ssh -t -i #{keypair_file}' #{backup_dir} #{instance_login_user}@#{instance_public_dns}:#{mount_dir_location}/`
+	puts rsync_output if verbose
+# backup files by tar / dd
+else 
+	# 1. make a compressed file with specified directory by tar
+	`tar -zcv -f backup1.tar.gz #{backup_dir}`	
+	
+	# 2. copy the compressed file to destination by dd
+	`dd if=backup1.tar.gz | ssh -i #{keypair_file} #{instance_login_user}@#{instance_public_dns} "dd of=#{mount_dir_location}/byu1.tar.gz"`
+	
+	# 3. remove the compressed file
+	`rm -rf backup1.tar.gz`
+end
+
+##################################################################################
+
+#
+# Detach volume from an instance
+#
+
+detach_from_instance_output = `ec2-detach-volume #{new_volume_id} -i #{instance_id} -d #{mount_dev_location} -K #{private_key} -C #{cert}`
+puts detach_from_instance_output if verbose
+
+# umount device
+
+umount_dev      = `ssh -t -o "StrictHostKeyChecking no" -i #{keypair_file} #{instance_login_user}@#{instance_public_dns} "umount #{mount_dev_location}"`
+puts umount_dev if verbose
+
+
+##################################################################################
