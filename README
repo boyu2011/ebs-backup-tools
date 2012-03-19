@@ -21,10 +21,26 @@ To start a new instance with AMI (ami-b232d0db).
 
 ec2-start-instance -a ami-b232d0db -K PRIVATE_KEY_FILE -C CERT_FILE -k KEYPAIR -g SECURITY_GROUP -v
 
+	-a AMI
+	-K PRIVATE_KEY_FILE
+	-C CERT_FILE
+	-k KEYPAIR
+	-g SECURITY_GROUP
+	-v VERBOSE
+
 To backup current folder to a volume tagged as 'TAG' using rsync.
 
-ec2-backup -K PRIVATE_KEY_FILE -C CERT_FILE -k KEYPAIR -g SECURITY_GROUP -f KEYPAIR_FILE -m rsync -d . -t TAG
+ec2-backup -K PRIVATE_KEY_FILE -C CERT_FILE -k KEYPAIR -g SECURITY_GROUP -f KEYPAIR_FILE -m rsync -d . -t TAG -v
 
+	-K PRIVATE_KEY_FILE
+	-C CERT_FILE
+	-k KEYPAIR
+	-g SECURITY_GROUP
+	-f KEYPAIR_FILE
+	-m BACKUP_METHOD
+	-d BACKUP_DIRECTORY
+	-t TAG
+	-v VERBOSE
 
 Hope you enjoy it!
 
