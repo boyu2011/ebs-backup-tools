@@ -33,6 +33,9 @@ require 'optparse'
 
 ##################################################################################
 
+# Keep STDOUT
+orig_stdout = $stdout
+
 def print_usage
 	puts "USAGE: ec2-backup [-hv] [-i instance] [-t tag] [-m method] -d dir -K PRIVATE_KEY -C CERT -k KEYPAIR -f KEYPAIR_FILE -g SECURITY_GROUP"
 end
@@ -259,10 +262,18 @@ end
 
 # -v	Print useful information if -v set.
 
-if options[:verbose]
+# if -v is set, output useful info to the screen
+if options[:verbose] then
 	verbose = true
+	
+	# redirect output to stdout
+	$stdout = orig_stdout
+# if -v is not set, don't output any info except errors.
 else
 	verbose = false
+	
+	# redirect stdout to /dev/null
+	$stdout = File.new('/dev/null', 'w')
 end
 
 ##################################################################################
@@ -373,7 +384,7 @@ sleep 4
 #
 
 puts "# Logining to EC2 instance and executing commands.." if verbose
-
+sleep 10
 #instance_key_location = "/Users/boyu2011/.ec2/stevens-key.pem"
 
 instance_login_user   = "root"
@@ -408,6 +419,7 @@ else
 	`dd if=backup1.tar.gz | ssh -i #{keypair_file} #{instance_login_user}@#{instance_public_dns} "dd of=#{mount_dir_location}/byu1.tar.gz"`
 	
 	# 3. remove the compressed file
+	sleep 5
 	`rm -rf backup1.tar.gz`
 end
 
@@ -425,5 +437,10 @@ puts detach_from_instance_output if verbose
 umount_dev      = `ssh -t -o "StrictHostKeyChecking no" -i #{keypair_file} #{instance_login_user}@#{instance_public_dns} "umount #{mount_dev_location}"`
 puts umount_dev if verbose
 
+# shutdown the instance
+
+puts "# Shutting down instnace..."
+shutdown_instance = `ec2-terminate-instances #{instance_id} -K #{private_key} -C #{cert}`
+puts shutdown_instance if verbose
 
 ##################################################################################

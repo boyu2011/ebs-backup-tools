@@ -1,3 +1,31 @@
-These tools able to perform a backup of a given directory to Amazon EBS in the cloud.
+#########################################################################
+	README
 
-Written by Bo Yu (boyu2011@gmail.com)
+	Author: Bo Yu (boyu2011@gmail.com)
+	Date: Mar 18th, 2012
+#########################################################################
+
+I created two commandline tools (ec2-backup, ec2-start-instance) able to perform a backup of a given directory to Amazon EBS in the cloud.
+
+I used Ruby as my programming language with several considerations. First, Ruby is a script language which is more suitable for automating manual tasks. Second, Ruby has very productive libraries for me to make things simple, for example, Ruby provides a class called OptionParser for command-line option analysis. Third, Ruby has a very elegant and beautiful syntax that make me happy when I use it.
+
+I followed the various features of good software engineering practices in my code. I used Defensive programming strategy to protect my program from unvalid or bad arguments. I tried my best to use configurable variables rather than hardcode. I wrote comments as many as I can to make prgram more readable and maintainable.
+
+I have uploaded my code to my github account(https://github.com/boyu2011/ebs-backup-tools), I would like to share my code to the Open Source Community. At the same time, the feedbacks from Community will improve the quality of my code.
+
+Before use the tools, I assume that the user has set up their environment for general use with the EC2 tools.
+
+Here, I list two examples for illustrating common usage of the tools.
+
+To start a new instance with AMI (ami-b232d0db).
+
+ec2-start-instance -a ami-b232d0db -K PRIVATE_KEY_FILE -C CERT_FILE -k KEYPAIR -g SECURITY_GROUP -v
+
+To backup current folder to a volume tagged as 'TAG' using rsync.
+
+ec2-backup -K PRIVATE_KEY_FILE -C CERT_FILE -k KEYPAIR -g SECURITY_GROUP -f KEYPAIR_FILE -m rsync -d . -t TAG
+
+
+Hope you enjoy it!
+
+
