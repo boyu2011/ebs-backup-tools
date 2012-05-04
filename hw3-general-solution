@@ -1,0 +1,54 @@
+
+Subject	[cs615asa] HW#3 grades
+Sender	Jan Schaumann 
+Recipient	cs615asa@lists.stevens.edu 
+Reply-To	CS615A - Aspects of System Administration 
+Date	04/04/2012 10:58 PM
+Hello,
+
+I have just sent out grades for HW#3.  If you did not receive a grade,
+please let me know asap.
+
+Here are a few things you should consider if you wish to improve your
+program:
+
+- Use EC2_RUN_INSTANCES_FLAGS in ec2-start-instance to allow the user to
+  specify flags to ec2-run-instances.  (Yes, this was explicitly noted
+  in the requirements, but many of you chose to ignore that part and
+  hardcoded some things or required the user to do other things.)
+
+- Don't hardcode ssh flags -- as per the instructions, you can assume
+  that the user has his or her ssh configuration set up.
+
+- use the ec2-start-instance tool you wrote in ec2-backup
+
+- when backing up using dd(1), do not create a tar file first and then
+  write that file to a file on the remote side; instead, use a simple
+  pipeline
+
+  tar cf - $DIR | ssh $instance "dd of=/dev/whatever"
+
+- Be more resilient to failure!  Things go wrong all the time; make sure
+  your program can handle the failure.  You cannot assume that a given
+  mountpoint is not in use, even if in the cases you came up with it
+  wasn't.  Recall that anything that can fail, will.  Make sure to check
+  for errors and act accordingly.  Gracefully aborting is preferable to
+  plowing ahead in the hopes that all will be well.
+
+- Make sure you handle the case where the volume already exists and is
+  or isn't attached to an instance.
+
+- Do not rely on 'ec2-describe-tags' to identify resources; tags can
+  exist and be assigned to resources that have been deleted.
+
+- Do not hardcode anything relating to your particular setup.
+
+- Always think about whether or not your program makes any assumptions
+  or requires any knowledge about your environment.  The user must not
+  need to modify the tool in order to make it work.
+
+-Jan
+_______________________________________________
+cs615asa mailing list
+cs615asa@lists.stevens.edu
+https://lists.stevens.edu/cgi-bin/mailman/listinfo/cs615asa
